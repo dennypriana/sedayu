@@ -193,6 +193,7 @@ TELEGRAM_TOKEN = APP_CONFIG["telegram_token"]
 CHAT_ID = APP_CONFIG["chat_id"]
 SCREENER_URL = APP_CONFIG["screener_url"]
 TOPIC_ID = int(os.environ.get("TOPIC_ID", "0") or 0)
+ADMIN_ID = os.environ.get("ADMIN_ID", "").strip()
 
 BEARER_TOKEN = load_bearer_token()
 WATCHLIST_FALLBACK = load_symbol_file("watchlist.txt", ["BAJA", "COIN", "MPIX", "MSIN", "PYFA"])
@@ -757,6 +758,11 @@ def edit_telegram(message_id: Optional[int], message: str) -> None:
         return
     telegram_request("editMessageText", {"chat_id": CHAT_ID, "message_id": message_id, "text": message, "disable_web_page_preview": True})
 
+def reply_cmd(target_id: str, msg_text: str) -> None:
+    p = {"chat_id": target_id, "text": msg_text, "disable_web_page_preview": True}
+    if target_id == str(CHAT_ID) and TOPIC_ID > 0:
+        p["message_thread_id"] = TOPIC_ID
+    telegram_request("sendMessage", p)
 
 def telegram_command_loop() -> None:
     """Mendengarkan perintah dari chat Telegram pemilik bot secara ringan (long-polling)."""
@@ -777,8 +783,10 @@ def telegram_command_loop() -> None:
             offset = max(offset, upd.get("update_id", 0) + 1)
             msg = upd.get("message") or {}
             chat_id = str((msg.get("chat") or {}).get("id") or "")
-            if chat_id != str(CHAT_ID):
-                continue
+                        sender_id = str((msg.get("from") or {}).get("id") or "")
+            allowed = {str(CHAT_ID), ADMIN_ID} if ADMIN_ID else {str(CHAT_ID)}
+            if chat_id not in allowed or (ADMIN_ID and sender_id != ADMIN_ID):
+            continue
 
             text = str(msg.get("text") or "").strip().lower()
             if text in ("/status", "status"):
@@ -787,7 +795,7 @@ def telegram_command_loop() -> None:
                 aktif = STORE.active_signals()
                 daftar_aktif = ", ".join(f"${s['symbol']}({s['kind']})" for s in aktif) if aktif else "Kosong"
                 kondisi_scan = "⏸️ PAUSED" if SCAN_PAUSED.is_set() else ("⚠️ TOKEN EXPIRED" if AUTH_EXPIRED.is_set() else "🟢 AKTIF")
-                send_telegram(
+                reply_cmd(chat_id,(
                     f"🤖 SEDAYU SCALPING STATUS ({'LIVE' if LIVE_MODE else 'TEST'})\n"
                     f"• Radar: {kondisi_scan}\n"
                     f"• Bursa: {m_status}\n"
@@ -796,14 +804,14 @@ def telegram_command_loop() -> None:
                 )
             elif text in ("/pause", "pause"):
                 SCAN_PAUSED.set()
-                send_telegram("⏸️ Pencarian sinyal baru dijeda (/pause). Sinyal yang sudah aktif tetap dipantau sampai TP/CL.")
+                reply_cmd(chat_id,("⏸️ Pencarian sinyal baru dijeda (/pause). Sinyal yang sudah aktif tetap dipantau sampai TP/CL.")
                 log("Bot dijeda oleh user via Telegram (/pause).")
             elif text in ("/resume", "resume"):
                 SCAN_PAUSED.clear()
-                send_telegram("▶️ Pencarian sinyal baru dilanjutkan (/resume).")
+                reply_cmd(chat_id,("▶️ Pencarian sinyal baru dilanjutkan (/resume).")
                 log("Bot dilanjutkan oleh user via Telegram (/resume).")
             elif text in ("/pagi", "pagi"):
-                send_telegram("🔍 Memindai kandidat Scalping Watchlist...")
+                reply_cmd(chat_id,("🔍 Memindai kandidat Scalping Watchlist...")
                 with LOCK:
                     wl = CURRENT_WATCHLIST_SHARED[:]
                 send_morning_watchlist(now_wib(), wl, force=True)
@@ -822,10 +830,10 @@ def telegram_command_loop() -> None:
                             f.write(new_tok + "\n")
                     except Exception:
                         pass
-                    send_telegram("✅ Bearer Token Stockbit berhasil diperbarui! Radar kembali aktif.")
+                    reply_cmd(chat_id,("✅ Bearer Token Stockbit berhasil diperbarui! Radar kembali aktif.")
                     log("Bearer Token diperbarui via perintah Telegram /token.")
                 else:
-                    send_telegram("❌ Format token tidak valid. Ketik: /token <paste_token_baru>")
+                    reply_cmd(chat_id("❌ Format token tidak valid. Ketik: /token <paste_token_baru>")
 
 
 
