@@ -114,10 +114,12 @@ def load_app_config() -> Dict[str, str]:
     env_tg = os.environ.get("TELEGRAM_TOKEN", "").strip()
     env_chat = os.environ.get("CHAT_ID", "").strip()
     env_scr = os.environ.get("SCREENER_URL", "").strip()
+    env_admin = os.environ.get("ADMIN_ID", "").strip()
 
     default_config = {
         "telegram_token": env_tg,
         "chat_id": env_chat,
+        "admin_id": env_admin,
         "screener_url": env_scr or "https://stockbit.com",
     }
     if os.path.exists(config_path):
@@ -128,12 +130,12 @@ def load_app_config() -> Dict[str, str]:
                 return {
                     "telegram_token": env_tg or str(loaded.get("telegram_token") or "").strip(),
                     "chat_id": env_chat or str(loaded.get("chat_id") or "").strip(),
+                    "admin_id": env_admin or str(loaded.get("admin_id") or "").strip(),
                     "screener_url": env_scr or str(loaded.get("screener_url") or default_config["screener_url"]).strip(),
                 }
         except Exception as exc:
             log(f"Gagal membaca config.json ({exc}).")
     return default_config
-
 
 def load_bearer_token() -> str:
     env_bearer = os.environ.get("BEARER_TOKEN", "").strip()
@@ -968,9 +970,14 @@ def telegram_command_loop() -> None:
             msg = upd.get("message") or {}
             chat_id = str((msg.get("chat") or {}).get("id") or "")
             sender_id = str((msg.get("from") or {}).get("id") or "")
-            allowed = {str(CHAT_ID), ADMIN_ID} if ADMIN_ID else {str(CHAT_ID)}
-            if chat_id not in allowed or (ADMIN_ID and sender_id != ADMIN_ID):
-                              continue
+
+            # Wajib cocok dengan User ID pribadi kamu (member lain otomatis diabaikan)
+            if not ADMIN_ID or sender_id != str(ADMIN_ID):
+                continue
+
+            # Hanya terima perintah dari grup utama atau chat pribadi (japri) kamu ke bot
+            if chat_id not in {str(CHAT_ID), str(ADMIN_ID)}:
+                continue
 
             text = str(msg.get("text") or "").strip().lower()
             if text in ("/status", "status"):
@@ -1848,7 +1855,7 @@ def main() -> None:
         CURRENT_WATCHLIST_SHARED = current_watchlist[:]
 
     log(f"Watchlist ({len(current_watchlist)}): {', '.join(current_watchlist)}")
-    send_telegram(f"⏳ {mode_prefix()}SEDAYU SCALPING Aktif ({len(current_watchlist)} saham)")
+    send_telegram(f" {mode_prefix()}BOT AKTIF ({len(current_watchlist)} saham)")
 
     last_screener_update = time.time()
     last_cleanup_date = now_wib().strftime("%Y-%m-%d")
