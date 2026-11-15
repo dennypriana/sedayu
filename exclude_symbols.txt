@@ -1,0 +1,1 @@
+# Satu simbol per baris. Isi manual simbol Papan Pemantauan Khusus / yang mau dikecualikan.

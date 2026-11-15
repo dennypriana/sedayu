@@ -1,0 +1,2 @@
+# Satu tanggal libur bursa per baris, format YYYY-MM-DD.
+# Perbarui berdasarkan kalender resmi BEI setiap tahun.
