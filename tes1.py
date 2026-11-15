@@ -766,6 +766,114 @@ def reply_cmd(target_id: str, msg_text: str) -> None:
         p["message_thread_id"] = TOPIC_ID
     telegram_request("sendMessage", p)
 
+def analyze_quick_check(symbol: str) -> str:
+    sym = symbol.upper().strip().replace("$", "")
+    if not re.fullmatch(r"[A-Z0-9]{4,6}", sym):
+        return "❌ Kode saham tidak valid. Contoh: /cek TRON"
+
+    data = fetch_orderbook(sym)
+    if not data:
+        return f"⚠️ Data ${sym} gagal ditarik atau akses dibatasi."
+
+    last = safe_int(safe_get_field(data, ("lastprice", "lastPrice", "last", "close")))
+    high = safe_int(safe_get_field(data, ("high", "highPrice", "highest")))
+    low = safe_int(safe_get_field(data, ("low", "lowPrice", "lowest")))
+    avg_p = safe_float(safe_get_field(data, ("average", "vwap", "avgPrice")))
+    prev = get_previous_close(data) or low
+    bids = data.get("bid") if isinstance(data.get("bid"), list) else []
+    offers = data.get("offer") if isinstance(data.get("offer"), list) else []
+
+    if last <= 0 or not bids or not offers:
+        return f"ℹ️ Orderbook ${sym} sedang kosong atau belum aktif."
+
+    chg_pct = ((last - prev) / prev * 100.0) if prev > 0 else 0.0
+    val_b = get_daily_value(data, last) / 1_000_000_000
+    tick = tick_size(last)
+    bid1_p = safe_int(bids[0].get("price"))
+    offer1_p = safe_int(offers[0].get("price"))
+    bid1_lot = extract_lots(bids[0], ORDERBOOK_VOLUME_UNIT)
+    offer1_lot = extract_lots(offers[0], ORDERBOOK_VOLUME_UNIT)
+    bid_top2 = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in bids[:2])
+    offer_top2 = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in offers[:2])
+    spread_ok = (offer1_p - bid1_p) <= tick and offer1_p > bid1_p
+
+    # Cek kondisi IHSG (COMPOSITE)
+    ihsg_pct = 0.0
+    ihsg_note = ""
+    ihsg_data = fetch_orderbook("COMPOSITE")
+    if ihsg_data:
+        i_last = safe_float(safe_get_field(ihsg_data, ("lastprice", "lastPrice", "last", "close")))
+        i_prev = get_previous_close(ihsg_data) or i_last
+        if i_last > 0 and i_prev > 0:
+            ihsg_pct = ((i_last - i_prev) / i_prev) * 100.0
+            if ihsg_pct <= -0.5:
+                ihsg_note = f" Namun IHSG sedang melemah ({ihsg_pct:+.2f}%), tetap hati-hati dan batasi lot."
+            elif ihsg_pct >= 0.3:
+                ihsg_note = f" IHSG juga menguat ({ihsg_pct:+.2f}%), peluang lanjut naik masih terbuka."
+
+    above_avg = (last >= int(avg_p)) if avg_p > 0 else True
+    wall_p, wall_lot = 0, 0
+    for lvl in offers[:3]:
+        lp = safe_int(lvl.get("price"))
+        ll = extract_lots(lvl, ORDERBOOK_VOLUME_UNIT)
+        if ll >= MIN_WALL_LOT:
+            wall_p, wall_lot = lp, ll
+            break
+
+    # Rakit kalimat info dinamis tanpa istilah indikator
+    alasan = []
+    if val_b >= 10.0:
+        alasan.append("Transaksi sangat ramai")
+    elif val_b >= 2.0:
+        alasan.append("Transaksi cukup likuid")
+    else:
+        alasan.append("Transaksi masih sepi")
+
+    alasan.append("dengan spread rapat (1 tick)." if spread_ok else "dan spread renggang sehingga rawan susah keluar.")
+
+    if bid_top2 > offer_top2 and above_avg:
+        alasan.append("Pembeli dominan menjaga antrean bawah dan harga bertahan kuat di area atas.")
+    elif not above_avg:
+        alasan.append("Tekanan jual lebih besar dan harga masih tertekan di area bawah.")
+    elif wall_p > 0:
+        alasan.append(f"Ada tembok jual tebal di {wall_p} ({wall_lot:,} lot) yang perlu ditembus.")
+    else:
+        alasan.append("Pergerakan harga masih seimbang menunggu dorongan antrean baru.")
+
+    info_text = " ".join(alasan) + ihsg_note
+
+    # Penentuan status & harga rencana entry
+    is_good = above_avg and spread_ok and val_b >= 2.0 and not is_special_board(data)
+    if is_good:
+        status_hdr = "⚠️ SIAP PANTAU (HATI-HATI IHSG MERAH)" if ihsg_pct <= -0.5 else "🟢 AMAN / SIAP ENTRY"
+        bo_entry = add_ticks(wall_p if wall_p > 0 else max(offer1_p, high), 1)
+        bo_tp = add_ticks(bo_entry, 4)
+        bo_cl = add_ticks(bo_entry, -3)
+
+        pb_base = int(round(avg_p)) if avg_p > 0 else add_ticks(last, -2)
+        pb_1 = min(add_ticks(last, -1), add_ticks(pb_base, 1))
+        pb_2 = add_ticks(pb_1, -1)
+        pb_tp = add_ticks(pb_1, 4)
+        pb_cl = add_ticks(pb_2, -2)
+
+        aksi_lines = (
+            f"• Masuk Cepat: Tunggu jebol {bo_entry} (TP {bo_tp} | CL {bo_cl})\n"
+            f"• Antre Bawah: {pb_2} – {pb_1} (TP {pb_tp} | CL {pb_cl})"
+        )
+    else:
+        status_hdr = "⛔ JANGAN MASUK"
+        reclaim = max(int(round(avg_p)) if avg_p > 0 else add_ticks(last, 2), add_ticks(offer1_p, 1))
+        supp = add_ticks(low, -1) if low > 0 else add_ticks(last, -3)
+        aksi_lines = f"• Pantau: Tunggu kuat di atas {reclaim} atau area {supp}"
+
+    return (
+        f"📊 ${sym} — {last} ({chg_pct:+.2f}%)\n"
+        f"Val: Rp {val_b:.1f} M | Bid: {bid1_p} ({bid1_lot:,}) | Offer: {offer1_p} ({offer1_lot:,})\n\n"
+        f"{status_hdr}\n"
+        f"{aksi_lines}\n"
+        f"• Info: {info_text}"
+    )
+
 def telegram_command_loop() -> None:
     """Mendengarkan perintah dari chat Telegram pemilik bot secara ringan (long-polling)."""
     if not telegram_ready():
@@ -820,6 +928,17 @@ def telegram_command_loop() -> None:
             elif text in ("/rekap", "rekap"):
                 reply_cmd(chat_id, "📊 Mengirim tes Rekap Harian ke topik Winrate...")
                 send_daily_report(now_wib())
+             elif text.startswith("/cek "):
+                raw_text = str(msg.get("text") or "").strip()
+                parts = raw_text.split(None, 1)
+                if len(parts) > 1:
+                    kode = parts[1].strip()
+                    reply_cmd(chat_id, f"🔍 Mengecek kondisi ${kode.upper()} & IHSG...")
+                    hasil_cek = analyze_quick_check(kode)
+                    reply_cmd(chat_id, hasil_cek)
+                else:
+                    reply_cmd(chat_id, "❌ Ketik kode sahamnya. Contoh: /cek TRON")
+
             elif text.startswith("/token "):
                 raw_text = str(msg.get("text") or "").strip()
                 new_tok = raw_text.split(None, 1)[1].strip()
