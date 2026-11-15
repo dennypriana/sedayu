@@ -979,16 +979,28 @@ def signal_message(state: Dict[str, Any]) -> str:
     gain_pct = safe_float(state.get("gain_pct"), 0.0)
     pucuk_tag = f" ⚠️ (+{gain_pct:.1f}% Rawan Pucuk)" if gain_pct >= MAX_GAIN_WARNING_PERCENT else ""
 
+    tp = int(state["tp"])
+    cl = int(state["cl"])
+
     if state["kind"] == "BO":
+        entry = int(state["entry"])
+        tp_pct = ((tp - entry) / entry * 100.0) if entry > 0 else 0.0
+        cl_pct = ((cl - entry) / entry * 100.0) if entry > 0 else 0.0
         return (
-            f"{ikon} {tag}${state['symbol']} BO {harga_skrg}{pucuk_tag}\n"
-            f"{state['entry']}\n"
-            f"TP {state['tp']} | CL {state['cl']}"
+            f"{tag}${state['symbol']} BO {harga_skrg} {ikon}{pucuk_tag}\n"
+            f"{entry}\n"
+            f"TP {tp} (+{tp_pct:.1f}%)\n"
+            f"CL {cl} ({cl_pct:+.1f}%)"
         )
+
+    p1 = int(state["p1"])
+    tp_pct = ((tp - p1) / p1 * 100.0) if p1 > 0 else 0.0
+    cl_pct = ((cl - p1) / p1 * 100.0) if p1 > 0 else 0.0
     return (
-        f"{ikon} {tag}${state['symbol']} PULLBACK {harga_skrg}{pucuk_tag}\n"
-        f"{state['p1']} | {state['p2']} | {state['p3']}\n"
-        f"TP {state['tp']} | CL {state['cl']}"
+        f"{tag}${state['symbol']} PULLBACK {harga_skrg} {ikon}{pucuk_tag}\n"
+        f"{p1} | {state['p2']} | {state['p3']}\n"
+        f"TP {tp} (+{tp_pct:.1f}%)\n"
+        f"CL {cl} ({cl_pct:+.1f}%)"
     )
 
 
