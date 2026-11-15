@@ -817,6 +817,9 @@ def telegram_command_loop() -> None:
                 with LOCK:
                     wl = CURRENT_WATCHLIST_SHARED[:]
                 send_morning_watchlist(now_wib(), wl, force=True)
+            elif text in ("/rekap", "rekap"):
+                reply_cmd(chat_id, "📊 Mengirim tes Rekap Harian ke topik Winrate...")
+                send_daily_report(now_wib())
             elif text.startswith("/token "):
                 raw_text = str(msg.get("text") or "").strip()
                 new_tok = raw_text.split(None, 1)[1].strip()
