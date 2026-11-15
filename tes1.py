@@ -1517,38 +1517,39 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
     else:
         support = pullback_low
 
-    # 2. Bagi Support dan Harga Terakhir jadi 3 Zona
-    # Jarak (Gap) dari support ke harga sekarang
-    gap = last - support
-    if gap < (2 * tick):
+    # 2. Hitung Jarak dalam Satuan TICK (BUKAN Rupiah)
+    # Kita cari berapa tick jarak dari support ke last
+    gap_rupiah = last - support
+    if gap_rupiah < (2 * tick):
         return # Terlalu mepet, skip aja, gak worth it
+    
+    gap_ticks = int(gap_rupiah / tick)
 
-    # P1: Titik pullback pertama (30% di atas support)
-    p1 = add_ticks(support, int(gap / 3))
-    
-    # P2: Titik optimal (60% di atas support, dekat harga terakhir)
-    p2 = add_ticks(support, int(gap * 2 / 3))
-    
+    # P1: Titik pullback pertama (30% di atas support / 1/3 dari gap)
+    # P2: Titik optimal (60% di atas support / 2/3 dari gap)
     # P3: Titik diskon (Support)
+    p1 = add_ticks(support, int(gap_ticks / 3))
+    p2 = add_ticks(support, int(gap_ticks * 2 / 3))
     p3 = support
 
-    # 3. Validasi: Urutan harga wajib P1 > P2 > P3
-    if p1 <= p2:
-        p1 = add_ticks(p2, 1)
-    if p2 <= p3:
-        p2 = add_ticks(p3, 1)
+    # 3. Validasi: Urutan harga wajib P1 < P2 < Last, dan P3 < P1
+    if p1 >= p2:
+        p1 = add_ticks(p2, -1) # Pastikan p1 di bawah p2
+    if p2 >= last:
+        p2 = add_ticks(last, -1) # Pastikan p2 di bawah harga sekarang
+    if p3 >= p1:
+        p3 = add_ticks(p1, -1) # Pastikan p3 paling bawah
 
-    # 4. Hitung TP & CL
-    # TP: Minimal 4 tick dari P1, atau 3% dari harga sekarang (mana yang lebih tinggi)
-    tp = max(add_ticks(p1, 4), int(round(last * 1.03)))
+    # 4. Hitung TP & CL (100% Fraksi BEI Valid)
+    # TP: Minimal 4 tick dari P2 (target coret-coretan)
+    tp = add_ticks(p2, 4)
     
-    # CL: Selalu 1 tick di bawah titik terbawah (P3), aman dari gap
+    # CL: Selalu 1 tick di bawah titik terbawah (P3)
     cl = add_ticks(p3, -1)
 
-    # 5. Validasi Akhir (Wajib)
-    if p3 <= 0 or cl <= 0 or last <= p1:
+    # 5. Validasi Akhir
+    if p3 <= 0 or cl <= 0 or last <= p2:
         return
-
     # =====================================================
     # 7. COOLDOWN DAN PEMBUATAN SINYAL
     # =====================================================
@@ -1760,8 +1761,8 @@ def send_morning_watchlist(now: datetime, symbols: List[str], force: bool = Fals
 
         entry_1 = add_ticks(high, 1)
         entry_2 = add_ticks(high, 2)
-        tp1 = max(add_ticks(entry_2, 3), int(round(entry_2 * 1.04)))
-        tp2 = max(add_ticks(tp1, 2), int(round(entry_2 * 1.08)))
+        tp1 = add_ticks(entry_2, 4)
+        tp2 = add_ticks(entry_2, 8)
 
         raw_sl = int(round(entry_1 * 0.98))
         sl_by_tick = add_ticks(entry_1, -3)
