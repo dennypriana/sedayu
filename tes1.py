@@ -786,7 +786,7 @@ def telegram_command_loop() -> None:
             sender_id = str((msg.get("from") or {}).get("id") or "")
             allowed = {str(CHAT_ID), ADMIN_ID} if ADMIN_ID else {str(CHAT_ID)}
             if chat_id not in allowed or (ADMIN_ID and sender_id != ADMIN_ID):
-            continue
+                              continue
 
             text = str(msg.get("text") or "").strip().lower()
             if text in ("/status", "status"):
