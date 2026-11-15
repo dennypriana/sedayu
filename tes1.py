@@ -1392,9 +1392,8 @@ def main() -> None:
 
     fast_thread = threading.Thread(target=fast_lane_loop, daemon=True)
     fast_thread.start()
-
+    
     cmd_thread = threading.Thread(target=telegram_command_loop, daemon=True)
-    cmd_thread.start()    cmd_thread = threading.Thread(target=telegram_command_loop, daemon=True)
     cmd_thread.start()
 
     start_keepalive_server()
