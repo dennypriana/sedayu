@@ -795,7 +795,7 @@ def telegram_command_loop() -> None:
                 aktif = STORE.active_signals()
                 daftar_aktif = ", ".join(f"${s['symbol']}({s['kind']})" for s in aktif) if aktif else "Kosong"
                 kondisi_scan = "⏸️ PAUSED" if SCAN_PAUSED.is_set() else ("⚠️ TOKEN EXPIRED" if AUTH_EXPIRED.is_set() else "🟢 AKTIF")
-                reply_cmd(chat_id,(
+                reply_cmd(chat_id,
                     f"🤖 SEDAYU SCALPING STATUS ({'LIVE' if LIVE_MODE else 'TEST'})\n"
                     f"• Radar: {kondisi_scan}\n"
                     f"• Bursa: {m_status}\n"
