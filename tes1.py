@@ -875,6 +875,78 @@ def analyze_quick_check(symbol: str) -> str:
         f"{aksi_lines}\n"
         f"• Info: {info_text}"
     )
+    
+def send_test_showcase(target_id: str) -> None:
+    """Mengirim diagnostik parameter & semua contoh tampilan indikator sinyal ke Telegram."""
+    mode_str = "LIVE" if LIVE_MODE else "TEST"
+    token_ok = "✅ OK" if (BEARER_TOKEN and not AUTH_EXPIRED.is_set()) else "❌ EXPIRED/KOSONG"
+    wl_count = len(CURRENT_WATCHLIST_SHARED)
+
+    diagnostik = (
+        f"🧪 UJI COBA INDIKATOR SEDAYU BOT ({mode_str})\n"
+        f"• Token Stockbit: {token_ok} | Watchlist: {wl_count} saham\n"
+        f"• Worker: {JUMLAH_WORKER} | Slow: {SCAN_INTERVAL_SECONDS}s | Fast: {FAST_LANE_INTERVAL_SECONDS}s\n"
+        f"• Min Wall: {MIN_WALL_LOT:,} lot | Bid Support: {MIN_BID_SUPPORT_LOT:,} lot\n"
+        f"• PB Range: ≥{MIN_PULLBACK_RANGE_PERCENT}% | Jarak VWAP: ≤{MAX_PULLBACK_VWAP_DISTANCE_PERCENT}%\n"
+        f"• Peringatan Pucuk: ≥+{MAX_GAIN_WARNING_PERCENT:.0f}% | Max Aktif: {MAX_ACTIVE_SIGNALS} sinyal"
+    )
+    reply_cmd(target_id, diagnostik)
+    time.sleep(0.4)
+
+    # 1. Contoh Sinyal Breakout (WAITING)
+    sample_bo_wait = {
+        "symbol": "PTRO",
+        "kind": "BO",
+        "status": "WAIT_BREAKOUT",
+        "last_at_alert": 2540,
+        "current_last": 2540,
+        "entry": 2550,
+        "tp": 2590,
+        "cl": 2520,
+        "gain_pct": 6.5,
+    }
+    reply_cmd(target_id, signal_message(sample_bo_wait))
+    time.sleep(0.4)
+
+    # 2. Contoh Sinyal Breakout (ACTIVE + Rawan Pucuk)
+    sample_bo_active = {
+        "symbol": "RAJA",
+        "kind": "BO",
+        "status": "ACTIVE",
+        "last_at_alert": 1820,
+        "current_last": 1825,
+        "entry": 1825,
+        "tp": 1845,
+        "cl": 1810,
+        "gain_pct": 16.4,
+    }
+    reply_cmd(target_id, signal_message(sample_bo_active))
+    time.sleep(0.4)
+
+    # 3. Contoh Sinyal Pullback (WAITING)
+    sample_pb_wait = {
+        "symbol": "MEDC",
+        "kind": "PB",
+        "status": "WAIT_ENTRY",
+        "last_at_alert": 1230,
+        "current_last": 1230,
+        "p1": 1225,
+        "p2": 1220,
+        "p3": 1215,
+        "tp": 1245,
+        "cl": 1205,
+        "gain_pct": 4.2,
+    }
+    reply_cmd(target_id, signal_message(sample_pb_wait))
+    time.sleep(0.4)
+
+    # 4. Contoh Hasil Sinyal Selesai (TP)
+    hasil_tp = (
+        "✅ $PTRO BO (TP)\n"
+        "2550 | Last 2590\n"
+        "TP 2590 | CL 2520"
+    )
+    reply_cmd(target_id, hasil_tp)
 
 def telegram_command_loop() -> None:
     """Mendengarkan perintah dari chat Telegram pemilik bot secara ringan (long-polling)."""
@@ -930,6 +1002,8 @@ def telegram_command_loop() -> None:
             elif text in ("/rekap", "rekap"):
                 reply_cmd(chat_id, "📊 Mengirim tes Rekap Harian ke topik Winrate...")
                 send_daily_report(now_wib())
+            elif text in ("/tes", "tes"):
+                send_test_showcase(chat_id)
             elif text.startswith("/cek "):
                 raw_text = str(msg.get("text") or "").strip()
                 parts = raw_text.split(None, 1)
