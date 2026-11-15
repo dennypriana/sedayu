@@ -583,11 +583,12 @@ def http_get_json(url: str, label: str) -> Optional[Dict[str, Any]]:
         try:
             response = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
             if response.status_code == 200:
-                try:
+                 try:
                     payload = response.json()
                     return payload if isinstance(payload, dict) else None
                 except ValueError:
-                    log(f"[{label}] Respons API bukan JSON valid.")
+                    preview = response.text[:150].replace("\n", " ")
+                    log(f"[{label}] Respons API bukan JSON valid (HTTP {response.status_code}): {preview}")
                     return None
             if response.status_code == 401:
                 if not AUTH_EXPIRED.is_set():
