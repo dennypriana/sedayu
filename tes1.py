@@ -1241,6 +1241,25 @@ def fast_lane_loop() -> None:
 
             STOP_EVENT.wait(FAST_LANE_INTERVAL_SECONDS)
 
+PREMARKET_CHECKED_DATE = ""
+
+def check_premarket_token(now: datetime) -> None:
+    global PREMARKET_CHECKED_DATE
+    today_str = now.date().isoformat()
+    if PREMARKET_CHECKED_DATE == today_str:
+        return
+    if now.weekday() >= 5 or now.date() in HOLIDAYS:
+        return
+    if not (now.hour == 8 and 45 <= now.minute <= 55):
+        return
+
+    PREMARKET_CHECKED_DATE = today_str
+    data = fetch_orderbook("BBCA")
+    if data and not AUTH_EXPIRED.is_set():
+        reply_cmd(ADMIN_ID or CHAT_ID, "🟢 Pre-Market Check (08:45 WIB): Bearer Token Stockbit AKTIF, bot siap pantau pembukaan bursa!")
+        log("Pre-market token check: OK.")
+    elif not AUTH_EXPIRED.is_set():
+        reply_cmd(ADMIN_ID or CHAT_ID, "⚠️ Pre-Market Check (08:45 WIB): Gagal terhubung ke API Stockbit, cek status token kamu.")
 
 # ============================================================================
 # MORNING SCALPING WATCHLIST & REKAP HARIAN
@@ -1466,6 +1485,8 @@ def main() -> None:
                 cleanup_daily_memory(today_str, current_watchlist)
                 last_cleanup_date = today_str
                 log("Memori harian & BLACKLIST_402 dibersihkan.")
+
+            check_premarket_token(now)
 
             if AUTH_EXPIRED.is_set():
                 if last_status != "AUTH_EXPIRED":
