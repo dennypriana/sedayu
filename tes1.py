@@ -783,7 +783,7 @@ def telegram_command_loop() -> None:
             offset = max(offset, upd.get("update_id", 0) + 1)
             msg = upd.get("message") or {}
             chat_id = str((msg.get("chat") or {}).get("id") or "")
-                        sender_id = str((msg.get("from") or {}).get("id") or "")
+            sender_id = str((msg.get("from") or {}).get("id") or "")
             allowed = {str(CHAT_ID), ADMIN_ID} if ADMIN_ID else {str(CHAT_ID)}
             if chat_id not in allowed or (ADMIN_ID and sender_id != ADMIN_ID):
             continue
