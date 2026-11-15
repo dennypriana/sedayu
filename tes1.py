@@ -62,7 +62,7 @@ else:
     MIN_BID_SUPPORT_LOT = 10
     MIN_BID_TO_WALL_RATIO = 0.0
     MIN_PULLBACK_RANGE_PERCENT = 0.5
-    MAX_VWAP_DISTANCE_ENTRY_PERCENT = 3.0
+    MAX_VWAP_DISTANCE_ENTRY_PERCENT = 1.5
     MAX_PULLBACK_VWAP_DISTANCE_PERCENT = 10.0
     PULLBACK_BOUNCE_SAMPLES = 3
 
@@ -203,7 +203,7 @@ SCREENER_URL = APP_CONFIG["screener_url"]
 SCREENER_URL_2 = APP_CONFIG.get("screener_url_2", "")
 TOPIC_ID = int(os.environ.get("TOPIC_ID", "0") or 0)
 TOPIC_WINRATE_ID = int(os.environ.get("TOPIC_WINRATE_ID", "0") or 0)
-ADMIN_ID = os.environ.get("ADMIN_ID", "").strip()
+ADMIN_ID = APP_CONFIG["admin_id"]
 MONTHLY_PIN_ID = int(os.environ.get("MONTHLY_PIN_ID", "0") or 0)
 
 BEARER_TOKEN = load_bearer_token()
@@ -422,7 +422,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 def safe_int(value: Any, default: int = 0) -> int:
     try:
-        return int(float(value))
+        return int(safe_float(value, default))
     except (TypeError, ValueError):
         return default
 
@@ -639,7 +639,6 @@ def fetch_screener(url: str = "", label: str = "Screener") -> List[str]:
     if not target or "ISI_URL" in target:
         return []
     payload = http_get_json(target, label)
-    ...  # sisa body SAMA PERSIS, tidak diubah
     if not payload or payload.get("__http_status__"):
         return []
     calcs = payload.get("data", {}).get("calcs", []) if isinstance(payload.get("data"), dict) else []
