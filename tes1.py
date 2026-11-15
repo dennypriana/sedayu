@@ -1507,42 +1507,35 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
     # 6. PENENTUAN ENTRY, TP DAN CL
     # =====================================================
 
+    # 1. Pastikan support selalu kelipatan fraksi BEI yang valid
     tick = tick_size(last)
     vwap_price = int(round(vwap / tick)) * tick
-
-    # 1. Tentukan Support (Titik Terendah Pantulan)
     if vwap_price >= (last - (5 * tick)) and vwap_price < last:
         support = vwap_price
     else:
         support = int(round(pullback_low / tick)) * tick
 
-    # 2. Hitung Jarak dalam Satuan TICK (BUKAN Rupiah)
     gap_rupiah = last - support
     if gap_rupiah < (2 * tick):
-        return  # Terlalu mepet, skip aja, gak worth it
+        return  # Terlalu mepet
 
     gap_ticks = int(round(gap_rupiah / tick))
 
-    # P1: Antrean pertama / tertinggi (2/3 dari support ke last)
-    # P2: Antrean kedua / tengah (1/3 dari support ke last)
-    # P3: Antrean ketiga / terbawah (Support)
-    p1 = add_ticks(support, int(gap_ticks * 2 / 3))
-    p2 = add_ticks(support, int(gap_ticks / 3))
+    # 2. Susun tangga P3 (bawah) -> P2 (tengah) -> P1 (atas)
     p3 = support
+    p2 = max(add_ticks(p3, 1), add_ticks(support, gap_ticks // 3))
+    p1 = max(add_ticks(p2, 1), add_ticks(support, (gap_ticks * 2) // 3))
 
-    # 3. Validasi: Urutan harga wajib Last > P1 > P2 > P3
+    # 3. Jika P1 menyentuh/melewati last, geser seluruh tangga turun 1 tick agar tidak tabrakan
     if p1 >= last:
         p1 = add_ticks(last, -1)
-    if p2 >= p1:
         p2 = add_ticks(p1, -1)
-    if p3 >= p2:
         p3 = add_ticks(p2, -1)
 
-    # 4. Hitung TP & CL (100% Fraksi BEI Valid)
+    # 4. Hitung TP & CL
     tp = add_ticks(p1, 4)
     cl = add_ticks(p3, -1)
 
-    # 5. Validasi Akhir
     if p3 <= 0 or cl <= 0 or last <= p1:
         return
     # =====================================================
