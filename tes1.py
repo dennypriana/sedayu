@@ -193,6 +193,7 @@ TELEGRAM_TOKEN = APP_CONFIG["telegram_token"]
 CHAT_ID = APP_CONFIG["chat_id"]
 SCREENER_URL = APP_CONFIG["screener_url"]
 TOPIC_ID = int(os.environ.get("TOPIC_ID", "0") or 0)
+TOPIC_WINRATE_ID = int(os.environ.get("TOPIC_WINRATE_ID", "0") or 0)
 ADMIN_ID = os.environ.get("ADMIN_ID", "").strip()
 
 BEARER_TOKEN = load_bearer_token()
@@ -742,14 +743,15 @@ def telegram_request(method: str, payload: Dict[str, Any], timeout: int = 8) -> 
             time.sleep(2)
     return None
 
-def send_telegram(message: str) -> Optional[int]:
+def send_telegram(message: str, topic_id: Optional[int] = None) -> Optional[int]:
+    target_topic = TOPIC_ID if topic_id is None else topic_id
     payload: Dict[str, Any] = {
         "chat_id": CHAT_ID,
         "text": message,
         "disable_web_page_preview": True,
     }
-    if TOPIC_ID > 0:
-        payload["message_thread_id"] = TOPIC_ID
+    if target_topic > 0:
+        payload["message_thread_id"] = target_topic
     result = telegram_request("sendMessage", payload)
     return safe_int(result.get("message_id")) if isinstance(result, dict) else None
 
@@ -1330,20 +1332,49 @@ def send_daily_report(now: datetime) -> None:
     if STORE.report_sent(report_date):
         return
     stats = STORE.daily_stats(now.date())
-    active = len(STORE.active_signals())
     closed = stats["tp"] + stats["cl"]
     winrate = (stats["tp"] / closed * 100.0) if closed else 0.0
     tag = mode_prefix()
 
+    nama_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+    nama_bulan = [
+        "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+        "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+    ]
+    tgl_label = f"{nama_hari[now.weekday()]}, {now.day} {nama_bulan[now.month]} {now.year}"
+
+    start_ts = datetime.combine(now.date(), dtime.min, WIB).timestamp()
+    end_ts = datetime.combine(now.date() + timedelta(days=1), dtime.min, WIB).timestamp()
+    with STORE.lock:
+        rows = STORE.conn.execute(
+            "SELECT state_json FROM signals WHERE status IN ('TP','CL') AND closed_at>=? AND closed_at<? ORDER BY closed_at ASC",
+            (start_ts, end_ts),
+        ).fetchall()
+
+    rincian = []
+    for r in rows:
+        try:
+            s = json.loads(r["state_json"])
+            ikon = "✅" if s.get("status") == "TP" else "❌"
+            ref = s.get("entry") if s.get("kind") == "BO" else s.get("p1")
+            last_c = s.get("last_at_close", "-")
+            rincian.append(f"• ${s['symbol']} ({s['kind']}) — {ikon} {s['status']} ({ref} → {last_c})")
+        except Exception:
+            continue
+
+    blok_rincian = "\n".join(rincian) if rincian else "• Belum ada sinyal yang menyentuh TP/CL hari ini."
     message = (
-        f"📊 {tag}REKAP {now.strftime('%d/%m')}\n"
-        f"✅ TP: {stats['tp']} | ❌ CL: {stats['cl']} | ⏳ Aktif: {active}\n"
-        f"⛔ Exp/Miss: {stats['expired']} | WR: {winrate:.0f}%"
+        f"📊 {tag}REKAP HARIAN\n"
+        f"{tgl_label}\n\n"
+        f"✅ TP: {stats['tp']} | ❌ CL: {stats['cl']}\n"
+        f"⛔ Exp/Miss: {stats['expired']} | 🎯 WR: {winrate:.0f}%\n\n"
+        f"Rincian Hasil:\n{blok_rincian}"
     )
-    message_id = send_telegram(message)
+    message_id = send_telegram(message, topic_id=TOPIC_WINRATE_ID or TOPIC_ID)
     if message_id:
         STORE.mark_report_sent(report_date)
         log("Rekap harian berhasil dikirim.")
+
 
 
 def build_watchlist(current: List[str]) -> List[str]:
