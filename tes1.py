@@ -1415,7 +1415,7 @@ def main() -> None:
         CURRENT_WATCHLIST_SHARED = current_watchlist[:]
 
     log(f"Watchlist ({len(current_watchlist)}): {', '.join(current_watchlist)}")
-    send_telegram(f"⏳ {mode_prefix()}SEDAYU SCALPING Aktif ({len(current_watchlist)} saham)\nPerintah: /status | /pause | /resume | /pagi")
+    send_telegram(f"⏳ {mode_prefix()}SEDAYU SCALPING Aktif ({len(current_watchlist)} saham)")
 
     last_screener_update = time.time()
     last_cleanup_date = now_wib().strftime("%Y-%m-%d")
