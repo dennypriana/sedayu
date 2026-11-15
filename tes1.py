@@ -31,7 +31,7 @@ import requests
 # SAKLAR UTAMA & KONFIGURASI KECEPATAN
 # ============================================================================
 
-LIVE_MODE = False                 # False = Mode Tes (Langsung kirim Morning Watchlist & bypass jam bursa)
+LIVE_MODE = True                 # False = Mode Tes (Langsung kirim Morning Watchlist & bypass jam bursa)
 
 # Cakupan & Kecepatan Scan Seimbang (Titik Tengah Cepat & Aman)
 MODE_CAKUPAN = "TOP_N"            # TOP_N (ambil maksimal MAX_SAHAM dari screener) | ALL | CUSTOM (watchlist.txt)
