@@ -968,11 +968,10 @@ def telegram_command_loop() -> None:
 # ============================================================================
 
 def mode_prefix() -> str:
-    return "" if LIVE_MODE else "[TEST] "
+    return "" if LIVE_MODE else ""
 
 
 def signal_message(state: Dict[str, Any]) -> str:
-    tag = mode_prefix()
     status = state.get("status", "")
     ikon = "🚀" if status == "ACTIVE" else "⏳"
     harga_skrg = state.get("current_last", state["last_at_alert"])
@@ -984,22 +983,22 @@ def signal_message(state: Dict[str, Any]) -> str:
 
     if state["kind"] == "BO":
         entry = int(state["entry"])
-        tp_pct = ((tp - entry) / entry * 100.0) if entry > 0 else 0.0
-        cl_pct = ((cl - entry) / entry * 100.0) if entry > 0 else 0.0
+        tp_pct = ((tp * 0.9975) - (entry * 1.0015)) / (entry * 1.0015) * 100.0 if entry > 0 else 0.0
+        cl_pct = ((cl * 0.9975) - (entry * 1.0015)) / (entry * 1.0015) * 100.0 if entry > 0 else 0.0
         return (
-            f"{tag}${state['symbol']} BO {harga_skrg} {ikon}{pucuk_tag}\n"
+            f"${state['symbol']} BO {harga_skrg} {ikon}{pucuk_tag}\n"
             f"{entry}\n"
-            f"TP {tp} (+{tp_pct:.1f}%)\n"
+            f"TP {tp} ({tp_pct:+.1f}%)\n"
             f"CL {cl} ({cl_pct:+.1f}%)"
         )
 
     p1 = int(state["p1"])
-    tp_pct = ((tp - p1) / p1 * 100.0) if p1 > 0 else 0.0
-    cl_pct = ((cl - p1) / p1 * 100.0) if p1 > 0 else 0.0
+    tp_pct = ((tp * 0.9975) - (p1 * 1.0015)) / (p1 * 1.0015) * 100.0 if p1 > 0 else 0.0
+    cl_pct = ((cl * 0.9975) - (p1 * 1.0015)) / (p1 * 1.0015) * 100.0 if p1 > 0 else 0.0
     return (
-        f"{tag}${state['symbol']} PULLBACK {harga_skrg} {ikon}{pucuk_tag}\n"
+        f"${state['symbol']} PULLBACK {harga_skrg} {ikon}{pucuk_tag}\n"
         f"{p1} | {state['p2']} | {state['p3']}\n"
-        f"TP {tp} (+{tp_pct:.1f}%)\n"
+        f"TP {tp} ({tp_pct:+.1f}%)\n"
         f"CL {cl} ({cl_pct:+.1f}%)"
     )
 
