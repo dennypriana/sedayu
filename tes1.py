@@ -192,6 +192,7 @@ APP_CONFIG = load_app_config()
 TELEGRAM_TOKEN = APP_CONFIG["telegram_token"]
 CHAT_ID = APP_CONFIG["chat_id"]
 SCREENER_URL = APP_CONFIG["screener_url"]
+TOPIC_ID = int(os.environ.get("TOPIC_ID", "0") or 0)
 
 BEARER_TOKEN = load_bearer_token()
 WATCHLIST_FALLBACK = load_symbol_file("watchlist.txt", ["BAJA", "COIN", "MPIX", "MSIN", "PYFA"])
@@ -740,11 +741,16 @@ def telegram_request(method: str, payload: Dict[str, Any], timeout: int = 8) -> 
             time.sleep(2)
     return None
 
-
 def send_telegram(message: str) -> Optional[int]:
-    result = telegram_request("sendMessage", {"chat_id": CHAT_ID, "text": message, "disable_web_page_preview": True})
+    payload: Dict[str, Any] = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": True,
+    }
+    if TOPIC_ID > 0:
+        payload["message_thread_id"] = TOPIC_ID
+    result = telegram_request("sendMessage", payload)
     return safe_int(result.get("message_id")) if isinstance(result, dict) else None
-
 
 def edit_telegram(message_id: Optional[int], message: str) -> None:
     if not message_id:
