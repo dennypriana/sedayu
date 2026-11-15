@@ -1507,48 +1507,43 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
     # 6. PENENTUAN ENTRY, TP DAN CL
     # =====================================================
 
-    vwap_price = int(round(vwap))
     tick = tick_size(last)
+    vwap_price = int(round(vwap / tick)) * tick
 
     # 1. Tentukan Support (Titik Terendah Pantulan)
-    # Prioritas: VWAP (jika dekat). Kalau VWAP jauh, pakai pullback_low.
     if vwap_price >= (last - (5 * tick)) and vwap_price < last:
         support = vwap_price
     else:
-        support = pullback_low
+        support = int(round(pullback_low / tick)) * tick
 
     # 2. Hitung Jarak dalam Satuan TICK (BUKAN Rupiah)
-    # Kita cari berapa tick jarak dari support ke last
     gap_rupiah = last - support
     if gap_rupiah < (2 * tick):
-        return # Terlalu mepet, skip aja, gak worth it
-    
-    gap_ticks = int(gap_rupiah / tick)
+        return  # Terlalu mepet, skip aja, gak worth it
 
-    # P1: Titik pullback pertama (30% di atas support / 1/3 dari gap)
-    # P2: Titik optimal (60% di atas support / 2/3 dari gap)
-    # P3: Titik diskon (Support)
-    p1 = add_ticks(support, int(gap_ticks / 3))
-    p2 = add_ticks(support, int(gap_ticks * 2 / 3))
+    gap_ticks = int(round(gap_rupiah / tick))
+
+    # P1: Antrean pertama / tertinggi (2/3 dari support ke last)
+    # P2: Antrean kedua / tengah (1/3 dari support ke last)
+    # P3: Antrean ketiga / terbawah (Support)
+    p1 = add_ticks(support, int(gap_ticks * 2 / 3))
+    p2 = add_ticks(support, int(gap_ticks / 3))
     p3 = support
 
-    # 3. Validasi: Urutan harga wajib P1 < P2 < Last, dan P3 < P1
-    if p1 >= p2:
-        p1 = add_ticks(p2, -1) # Pastikan p1 di bawah p2
-    if p2 >= last:
-        p2 = add_ticks(last, -1) # Pastikan p2 di bawah harga sekarang
-    if p3 >= p1:
-        p3 = add_ticks(p1, -1) # Pastikan p3 paling bawah
+    # 3. Validasi: Urutan harga wajib Last > P1 > P2 > P3
+    if p1 >= last:
+        p1 = add_ticks(last, -1)
+    if p2 >= p1:
+        p2 = add_ticks(p1, -1)
+    if p3 >= p2:
+        p3 = add_ticks(p2, -1)
 
     # 4. Hitung TP & CL (100% Fraksi BEI Valid)
-    # TP: Minimal 4 tick dari P2 (target coret-coretan)
-    tp = add_ticks(p2, 4)
-    
-    # CL: Selalu 1 tick di bawah titik terbawah (P3)
+    tp = add_ticks(p1, 4)
     cl = add_ticks(p3, -1)
 
     # 5. Validasi Akhir
-    if p3 <= 0 or cl <= 0 or last <= p2:
+    if p3 <= 0 or cl <= 0 or last <= p1:
         return
     # =====================================================
     # 7. COOLDOWN DAN PEMBUATAN SINYAL
