@@ -804,11 +804,11 @@ def telegram_command_loop() -> None:
                 )
             elif text in ("/pause", "pause"):
                 SCAN_PAUSED.set()
-                reply_cmd(chat_id,("⏸️ Pencarian sinyal baru dijeda (/pause). Sinyal yang sudah aktif tetap dipantau sampai TP/CL.")
+                reply_cmd(chat_id,"⏸️ Pencarian sinyal baru dijeda (/pause). Sinyal yang sudah aktif tetap dipantau sampai TP/CL.")
                 log("Bot dijeda oleh user via Telegram (/pause).")
             elif text in ("/resume", "resume"):
                 SCAN_PAUSED.clear()
-                reply_cmd(chat_id,("▶️ Pencarian sinyal baru dilanjutkan (/resume).")
+                reply_cmd(chat_id,"▶️ Pencarian sinyal baru dilanjutkan (/resume).")
                 log("Bot dilanjutkan oleh user via Telegram (/resume).")
             elif text in ("/pagi", "pagi"):
                 reply_cmd(chat_id,("🔍 Memindai kandidat Scalping Watchlist...")
@@ -830,10 +830,10 @@ def telegram_command_loop() -> None:
                             f.write(new_tok + "\n")
                     except Exception:
                         pass
-                    reply_cmd(chat_id,("✅ Bearer Token Stockbit berhasil diperbarui! Radar kembali aktif.")
+                    reply_cmd(chat_id,"✅ Bearer Token Stockbit berhasil diperbarui! Radar kembali aktif.")
                     log("Bearer Token diperbarui via perintah Telegram /token.")
                 else:
-                    reply_cmd(chat_id("❌ Format token tidak valid. Ketik: /token <paste_token_baru>")
+                    reply_cmd(chat_id,"❌ Format token tidak valid. Ketik: /token <paste_token_baru>")
 
 
 
