@@ -49,6 +49,7 @@ COOLDOWN_SECONDS = 180
 MIN_WALL_LOT = 5000
 MIN_DAILY_VALUE_IDR = 2_000_000_000
 MAX_SIGNAL_AGE_SECONDS = 900      # Maksimal 15 menit (otomatis dipangkas jika mendekati 15:50 WIB)
+MAX_GAIN_WARNING_PERCENT = 15.0   # Peringatan pucuk jika kenaikan >= 15%
 
 if LIVE_MODE:
     MIN_BID_SUPPORT_LOT = 2000
@@ -195,6 +196,7 @@ SCREENER_URL = APP_CONFIG["screener_url"]
 TOPIC_ID = int(os.environ.get("TOPIC_ID", "0") or 0)
 TOPIC_WINRATE_ID = int(os.environ.get("TOPIC_WINRATE_ID", "0") or 0)
 ADMIN_ID = os.environ.get("ADMIN_ID", "").strip()
+MONTHLY_PIN_ID = int(os.environ.get("MONTHLY_PIN_ID", "0") or 0)
 
 BEARER_TOKEN = load_bearer_token()
 WATCHLIST_FALLBACK = load_symbol_file("watchlist.txt", ["BAJA", "COIN", "MPIX", "MSIN", "PYFA"])
@@ -974,15 +976,17 @@ def signal_message(state: Dict[str, Any]) -> str:
     status = state.get("status", "")
     ikon = "🚀" if status == "ACTIVE" else "⏳"
     harga_skrg = state.get("current_last", state["last_at_alert"])
+    gain_pct = safe_float(state.get("gain_pct"), 0.0)
+    pucuk_tag = f" ⚠️ (+{gain_pct:.1f}% Rawan Pucuk)" if gain_pct >= MAX_GAIN_WARNING_PERCENT else ""
 
     if state["kind"] == "BO":
         return (
-            f"{ikon} {tag}${state['symbol']} BO {harga_skrg}\n"
+            f"{ikon} {tag}${state['symbol']} BO {harga_skrg}{pucuk_tag}\n"
             f"{state['entry']}\n"
             f"TP {state['tp']} | CL {state['cl']}"
         )
     return (
-        f"{ikon} {tag}${state['symbol']} PULLBACK {harga_skrg}\n"
+        f"{ikon} {tag}${state['symbol']} PULLBACK {harga_skrg}{pucuk_tag}\n"
         f"{state['p1']} | {state['p2']} | {state['p3']}\n"
         f"TP {state['tp']} | CL {state['cl']}"
     )
@@ -1062,13 +1066,25 @@ def monitor_active_signals(symbol: str, last: int) -> None:
             continue
 
         if kind == "BO" and status == "ACTIVE":
-            if last >= int(state["tp"]):
+            entry = int(state["entry"])
+            tp = int(state["tp"])
+            bep_trigger = add_ticks(entry, 2)
+            if last >= tp:
                 finalize_signal(state, "TP", last)
             elif last <= int(state["cl"]):
                 finalize_signal(state, "CL", last)
+            elif last >= bep_trigger and int(state["cl"]) < entry:
+                with LOCK:
+                    state["cl"] = entry
+                    state["current_last"] = last
+                    STORE.save_signal(state)
+                    STORE.event(state["signal_id"], "TRAILING_BEP", f"last={last}; new_cl={entry}")
+                edit_telegram(state.get("message_id"), signal_message(state))
+                log(f"[{symbol}] BO Auto-Trailing: CL digeser ke BEP {entry} (last {last})")
             elif age >= max_age:
                 finalize_signal(state, "EXPIRED", last)
             continue
+
 
         if kind == "PB" and status == "WAIT_ENTRY":
             p1 = int(state["p1"])
@@ -1094,12 +1110,24 @@ def monitor_active_signals(symbol: str, last: int) -> None:
             continue
 
         if kind == "PB" and status == "ACTIVE":
-            if last >= int(state["tp"]):
+            p1 = int(state["p1"])
+            tp = int(state["tp"])
+            bep_trigger = add_ticks(p1, 2)
+            if last >= tp:
                 finalize_signal(state, "TP", last)
             elif last <= int(state["cl"]):
                 finalize_signal(state, "CL", last)
+            elif last >= bep_trigger and int(state["cl"]) < p1:
+                with LOCK:
+                    state["cl"] = p1
+                    state["current_last"] = last
+                    STORE.save_signal(state)
+                    STORE.event(state["signal_id"], "TRAILING_BEP", f"last={last}; new_cl={p1}")
+                edit_telegram(state.get("message_id"), signal_message(state))
+                log(f"[{symbol}] PB Auto-Trailing: CL digeser ke BEP {p1} (last {last})")
             elif age >= max_age:
                 finalize_signal(state, "EXPIRED", last)
+
 
 
 # ============================================================================
@@ -1117,7 +1145,7 @@ def is_spread_tight(bids: List[Dict[str, Any]], offers: List[Dict[str, Any]], ti
 
 
 def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion: float,
-                    offers: List[Dict[str, Any]], bids: List[Dict[str, Any]]) -> None:
+                    offers: List[Dict[str, Any]], bids: List[Dict[str, Any]], gain_pct: float = 0.0) -> None:
     if SCAN_PAUSED.is_set() or STORE.active_count() >= MAX_ACTIVE_SIGNALS or STORE.has_active(symbol, "BO"):
         return
     if not is_spread_tight(bids, offers, tick):
@@ -1150,6 +1178,7 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
         return
 
     wall_price, initial_lots, signal_key = kandidat
+    wall_swept = False
 
     if LIVE_MODE:
         STOP_EVENT.wait(2.0)
@@ -1159,7 +1188,7 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
         if not recheck_data:
             return
 
-        new_last = safe_int(recheck_data.get("lastprice"))
+        new_last = safe_int(safe_get_field(recheck_data, ("lastprice", "lastPrice", "last", "close")))
         new_offers = recheck_data.get("offer") if isinstance(recheck_data.get("offer"), list) else []
         new_bids = recheck_data.get("bid") if isinstance(recheck_data.get("bid"), list) else []
         new_bid_lots = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in new_bids[:2])
@@ -1172,10 +1201,11 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
 
         entry = add_ticks(wall_price, 1)
         already_broke = new_last >= entry
+        wall_swept = (new_last >= wall_price and remaining_wall_lots == 0 and new_bid_lots >= MIN_BID_SUPPORT_LOT)
         wall_still_valid = remaining_wall_lots >= int(initial_lots * 0.5) and new_bid_lots >= MIN_BID_SUPPORT_LOT
         wall_eaten_up = new_last >= wall_price and remaining_wall_lots < initial_lots
 
-        if not (already_broke or wall_still_valid or wall_eaten_up):
+        if not (already_broke or wall_swept or wall_still_valid or wall_eaten_up):
             log(f"[{symbol}] Spoof wall di {wall_price} terdeteksi, diabaikan.")
             return
 
@@ -1188,7 +1218,7 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
     cl = add_ticks(wall_price, -2)
     signal_id = str(uuid.uuid4())
 
-    is_confirmed = last >= entry
+    is_confirmed = (last >= entry) or wall_swept
     state = {
         "signal_id": signal_id,
         "signal_key": signal_key,
@@ -1206,13 +1236,15 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
         "current_last": last,
         "value_billion": value_billion,
         "wall_max_lots": initial_lots,
+        "gain_pct": gain_pct,
         "entry_confirmed": is_confirmed,
     }
     create_signal(state)
 
 
 def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, tick: int,
-                    value_billion: float, bids: List[Dict[str, Any]], offers: List[Dict[str, Any]]) -> None:
+                    value_billion: float, bids: List[Dict[str, Any]], offers: List[Dict[str, Any]],
+                    gain_pct: float = 0.0) -> None:
     if low <= 0 or vwap <= 0 or high <= low:
         return
     if SCAN_PAUSED.is_set() or STORE.active_count() >= MAX_ACTIVE_SIGNALS or STORE.has_active(symbol, "PB"):
@@ -1238,6 +1270,10 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
     bid2 = extract_lots(bids[1], ORDERBOOK_VOLUME_UNIT) if len(bids) > 1 else 0
     offer1 = extract_lots(offers[0], ORDERBOOK_VOLUME_UNIT) if offers else 0
 
+    bid_top3 = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in bids[:3])
+    offer_top3 = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in offers[:3])
+    imbalance_ok = (bid_top3 >= int(offer_top3 * 1.5)) if LIVE_MODE else (bid1 > offer1)
+
     recent_low = min(recent_prices)
     bounce_confirmed = (last > recent_low and last >= recent_prices[-2]) if LIVE_MODE else (last >= recent_low)
 
@@ -1247,6 +1283,7 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
         and -0.5 <= vwap_distance <= MAX_PULLBACK_VWAP_DISTANCE_PERCENT
         and (bid1 + bid2) >= MIN_BID_SUPPORT_LOT
         and bid1 > offer1
+        and imbalance_ok
         and bounce_confirmed
     )
     if not conditions:
@@ -1275,7 +1312,7 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
         "message_id": None, "p1": p1, "p2": p2, "p3": p3, "tp": tp, "cl": cl,
         "last_at_alert": last, "current_last": last, "vwap": vwap, "value_billion": value_billion,
         "range_percent": range_percent, "vwap_distance_percent": vwap_distance,
-        "entry_confirmed": False,
+        "gain_pct": gain_pct, "entry_confirmed": False,
     }
     create_signal(state)
 
@@ -1285,7 +1322,6 @@ def analyze_symbol(symbol: str, data: Dict[str, Any], monitor_only: bool = False
         if not response_is_fresh(data) or is_special_board(data):
             return
 
-        # Menggunakan multi-key fallback untuk mengamankan parsing dari perubahan struktur API
         raw_last = safe_get_field(data, ("lastprice", "lastPrice", "last", "close"))
         raw_high = safe_get_field(data, ("high", "highPrice", "highest"))
         raw_low = safe_get_field(data, ("low", "lowPrice", "lowest"))
@@ -1312,9 +1348,11 @@ def analyze_symbol(symbol: str, data: Dict[str, Any], monitor_only: bool = False
             return
         tick = tick_size(last)
         value_billion = daily_value / 1_000_000_000
+        prev_close = get_previous_close(data) or low
+        gain_pct = ((last - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
 
-        detect_breakout(symbol, last, high, tick, value_billion, offers, bids)
-        detect_pullback(symbol, last, high, low, vwap, tick, value_billion, bids, offers)
+        detect_breakout(symbol, last, high, tick, value_billion, offers, bids, gain_pct)
+        detect_pullback(symbol, last, high, low, vwap, tick, value_billion, bids, offers, gain_pct)
     except Exception as exc:
         log(f"[Error Analisa {symbol}] {type(exc).__name__}: {exc}")
 
@@ -1593,6 +1631,7 @@ def main() -> None:
     last_cleanup_date = now_wib().strftime("%Y-%m-%d")
     last_status = ""
     cycle = 0
+    lunch_reset_date = ""
 
     with ThreadPoolExecutor(max_workers=JUMLAH_WORKER) as executor:
         while not STOP_EVENT.is_set():
@@ -1606,6 +1645,11 @@ def main() -> None:
                 log("Memori harian & BLACKLIST_402 dibersihkan.")
 
             check_premarket_token(now)
+            if now.hour == 13 and 25 <= now.minute <= 29 and lunch_reset_date != today_str:
+                with LOCK:
+                    PRICE_HISTORY.clear()
+                lunch_reset_date = today_str
+                log("Memori pantulan harga pagi dibersihkan sebelum Sesi II.")
 
             if AUTH_EXPIRED.is_set():
                 if last_status != "AUTH_EXPIRED":
