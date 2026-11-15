@@ -80,7 +80,7 @@ BLACKLIST_402 = set()
 RATE_LIMIT_UNTIL = 0.0
 CURRENT_WATCHLIST_SHARED: List[str] = []
 
-PRICE_HISTORY: Dict[str, deque] = defaultdict(lambda: deque(maxlen=8))
+PRICE_HISTORY: Dict[str, deque] = defaultdict(lambda: deque(maxlen=60))
 TICK_CACHE: Dict[str, Tuple[str, int, str]] = {}
 
 
@@ -1242,79 +1242,217 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
     create_signal(state)
 
 
+
 def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, tick: int,
                     value_billion: float, bids: List[Dict[str, Any]], offers: List[Dict[str, Any]],
                     gain_pct: float = 0.0) -> None:
-    if low <= 0 or vwap <= 0 or high <= low:
+
+    if low <= 0 or vwap <= 0 or high <= low or last <= 0:
         return
+
     if SCAN_PAUSED.is_set() or STORE.active_count() >= MAX_ACTIVE_SIGNALS or STORE.has_active(symbol, "PB"):
         return
+
+    # Filter spread
     if not is_spread_tight(bids, offers, tick):
         return
 
-    if LIVE_MODE and last < int(vwap):
-        return
-
+    # Catat histori harga
     with LOCK:
         price_history = PRICE_HISTORY[symbol]
         now_ts = time.time()
         price_history.append((now_ts, last))
-        recent_prices = [item[1] for item in list(price_history) if now_ts - item[0] <= 180][-max(PULLBACK_BOUNCE_SAMPLES, 4):]
 
-    if len(recent_prices) < PULLBACK_BOUNCE_SAMPLES:
+        samples = [
+            item[1] for item in price_history
+            if now_ts - item[0] <= 600
+        ][-36:]
+
+    # Minimal histori untuk membaca struktur harga
+    if len(samples) < 8:
         return
+
+    # =====================================================
+    # 1. FILTER KONDISI HARGA DAN VWAP
+    # =====================================================
 
     range_percent = ((high - low) / low) * 100.0
     vwap_distance = ((last - vwap) / vwap) * 100.0
-    bid1 = extract_lots(bids[0], ORDERBOOK_VOLUME_UNIT) if bids else 0
-    bid2 = extract_lots(bids[1], ORDERBOOK_VOLUME_UNIT) if len(bids) > 1 else 0
-    offer1 = extract_lots(offers[0], ORDERBOOK_VOLUME_UNIT) if offers else 0
 
-    bid_top3 = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in bids[:3])
-    offer_top3 = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in offers[:3])
-    imbalance_ok = (bid_top3 >= int(offer_top3 * 1.5)) if LIVE_MODE else (bid1 > offer1)
-
-    recent_low = min(recent_prices)
-    bounce_confirmed = (last > recent_low and last >= recent_prices[-2]) if LIVE_MODE else (last >= recent_low)
-
-    conditions = (
-        range_percent >= MIN_PULLBACK_RANGE_PERCENT
-        and last < high
-        and -0.5 <= vwap_distance <= MAX_PULLBACK_VWAP_DISTANCE_PERCENT
-        and (bid1 + bid2) >= MIN_BID_SUPPORT_LOT
-        and bid1 > offer1
-        and imbalance_ok
-        and bounce_confirmed
-    )
-    if not conditions:
+    # Hindari saham terlalu sepi atau terlalu jauh dari VWAP
+    if range_percent < 1.5:
         return
 
+    if not (-0.5 <= vwap_distance <= 1.5):
+        return
+
+    # =====================================================
+    # 2. IDENTIFIKASI IMPULS NAIK
+    # =====================================================
+
+    peak_index = max(range(len(samples) - 3), key=lambda i: samples[i])
+    peak_price = samples[peak_index]
+
+    # Puncak harus terbentuk setelah awal histori
+    if peak_index < 2:
+        return
+
+    base_price = min(samples[:peak_index + 1])
+
+    if base_price <= 0 or peak_price <= base_price:
+        return
+
+    impulse_percent = ((peak_price - base_price) / base_price) * 100.0
+
+    # Minimal impuls kenaikan 0,8%
+    if impulse_percent < 0.8:
+        return
+
+    # =====================================================
+    # 3. IDENTIFIKASI RETRACEMENT
+    # =====================================================
+
+    after_peak = samples[peak_index + 1:-1]
+
+    if len(after_peak) < 2:
+        return
+
+    pullback_low = min(after_peak)
+
+    if pullback_low <= 0 or pullback_low >= peak_price:
+        return
+
+    # Struktur koreksi tidak boleh merusak titik awal impuls
+    if pullback_low <= base_price:
+        return
+
+    pullback_depth = peak_price - pullback_low
+
+    retracement_percent = (
+        pullback_depth / (peak_price - base_price)
+    ) * 100.0
+
+    # Koreksi sehat: 20%-65% dari impuls
+    if not (20.0 <= retracement_percent <= 65.0):
+        return
+
+    # =====================================================
+    # 4. KONFIRMASI PANTULAN
+    # =====================================================
+
+    previous_price = samples[-2]
+
+    if last <= pullback_low:
+        return
+
+    if last <= previous_price:
+        return
+
+    bounce_percent = (
+        (last - pullback_low) / pullback_depth
+    ) * 100.0
+
+    # Pantulan minimal 25%, maksimal 70%
+    if not (25.0 <= bounce_percent <= 70.0):
+        return
+
+    # Jangan mengejar harga yang sudah terlalu dekat pucuk
+    if last >= peak_price:
+        return
+
+    # =====================================================
+    # 5. KONFIRMASI ORDERBOOK
+    # =====================================================
+
+    bid1 = extract_lots(bids[0], ORDERBOOK_VOLUME_UNIT)
+    bid2 = extract_lots(bids[1], ORDERBOOK_VOLUME_UNIT) if len(bids) > 1 else 0
+
+    offer1 = extract_lots(offers[0], ORDERBOOK_VOLUME_UNIT)
+
+    bid_top3 = sum(
+        extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in bids[:3]
+    )
+
+    offer_top3 = sum(
+        extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in offers[:3]
+    )
+
+    if bid1 <= offer1:
+        return
+
+    if bid1 + bid2 < MIN_BID_SUPPORT_LOT:
+        return
+
+    if bid_top3 < offer_top3 * 1.20:
+        return
+
+    # =====================================================
+    # 6. PENENTUAN ENTRY, TP DAN CL
+    # =====================================================
+
     vwap_price = int(round(vwap))
+
     p1 = min(add_ticks(last, -1), add_ticks(vwap_price, 1))
+
     if p1 < vwap_price:
         p1 = vwap_price
+
     p2 = add_ticks(p1, -1)
     p3 = add_ticks(p2, -1)
+
     tp = add_ticks(p1, 4)
     cl = add_ticks(vwap_price, -2)
 
     if p3 <= 0 or cl <= 0 or last <= cl:
         return
 
+    # =====================================================
+    # 7. COOLDOWN DAN PEMBUATAN SINYAL
+    # =====================================================
+
     signal_key = f"{symbol}|PB|{p1}"
+
     if STORE.has_recent_key(signal_key, COOLDOWN_SECONDS):
         return
 
     signal_id = str(uuid.uuid4())
+
     state = {
-        "signal_id": signal_id, "signal_key": signal_key, "symbol": symbol, "kind": "PB",
-        "status": "WAIT_ENTRY", "display_status": "SETUP / WAIT AREA", "created_at": now_ts,
-        "message_id": None, "p1": p1, "p2": p2, "p3": p3, "tp": tp, "cl": cl,
-        "last_at_alert": last, "current_last": last, "vwap": vwap, "value_billion": value_billion,
-        "range_percent": range_percent, "vwap_distance_percent": vwap_distance,
-        "gain_pct": gain_pct, "entry_confirmed": False,
+        "signal_id": signal_id,
+        "signal_key": signal_key,
+        "symbol": symbol,
+        "kind": "PB",
+        "status": "WAIT_ENTRY",
+        "display_status": "SETUP / WAIT AREA",
+        "created_at": now_ts,
+        "message_id": None,
+
+        "p1": p1,
+        "p2": p2,
+        "p3": p3,
+
+        "tp": tp,
+        "cl": cl,
+
+        "last_at_alert": last,
+        "current_last": last,
+
+        "vwap": vwap,
+        "value_billion": value_billion,
+
+        "range_percent": range_percent,
+        "vwap_distance_percent": vwap_distance,
+
+        "impulse_percent": impulse_percent,
+        "retracement_percent": retracement_percent,
+        "bounce_percent": bounce_percent,
+
+        "gain_pct": gain_pct,
+        "entry_confirmed": False,
     }
+
     create_signal(state)
+
 
 
 def analyze_symbol(symbol: str, data: Dict[str, Any], monitor_only: bool = False) -> None:
