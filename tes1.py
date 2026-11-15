@@ -597,7 +597,7 @@ def http_get_json(url: str, label: str) -> Optional[Dict[str, Any]]:
             if response.status_code == 401:
                 if not AUTH_EXPIRED.is_set():
                     AUTH_EXPIRED.set()
-                    send_telegram("⚠️ Bearer Token Stockbit Expired! Segera update token.txt dan restart bot.")
+                    reply_cmd(ADMIN_ID or CHAT_ID,"⚠️ Bearer Token Stockbit Expired! Segera update token.txt dan restart bot.")
                 log(f"[{label}] HTTP 401: Bearer Token Stockbit kedaluwarsa/tidak valid.")
                 return None
             if response.status_code == 402:
