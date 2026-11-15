@@ -928,7 +928,7 @@ def telegram_command_loop() -> None:
             elif text in ("/rekap", "rekap"):
                 reply_cmd(chat_id, "📊 Mengirim tes Rekap Harian ke topik Winrate...")
                 send_daily_report(now_wib())
-             elif text.startswith("/cek "):
+            elif text.startswith("/cek "):
                 raw_text = str(msg.get("text") or "").strip()
                 parts = raw_text.split(None, 1)
                 if len(parts) > 1:
