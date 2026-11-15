@@ -1508,19 +1508,45 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
     # =====================================================
 
     vwap_price = int(round(vwap))
+    tick = tick_size(last)
 
-    p1 = min(add_ticks(last, -1), add_ticks(vwap_price, 1))
+    # 1. Tentukan Support (Titik Terendah Pantulan)
+    # Prioritas: VWAP (jika dekat). Kalau VWAP jauh, pakai pullback_low.
+    if vwap_price >= (last - (5 * tick)) and vwap_price < last:
+        support = vwap_price
+    else:
+        support = pullback_low
 
-    if p1 < vwap_price:
-        p1 = vwap_price
+    # 2. Bagi Support dan Harga Terakhir jadi 3 Zona
+    # Jarak (Gap) dari support ke harga sekarang
+    gap = last - support
+    if gap < (2 * tick):
+        return # Terlalu mepet, skip aja, gak worth it
 
-    p2 = add_ticks(p1, -1)
-    p3 = add_ticks(p2, -1)
+    # P1: Titik pullback pertama (30% di atas support)
+    p1 = add_ticks(support, int(gap / 3))
+    
+    # P2: Titik optimal (60% di atas support, dekat harga terakhir)
+    p2 = add_ticks(support, int(gap * 2 / 3))
+    
+    # P3: Titik diskon (Support)
+    p3 = support
 
-    tp = add_ticks(p1, 4)
-    cl = add_ticks(vwap_price, -2)
+    # 3. Validasi: Urutan harga wajib P1 > P2 > P3
+    if p1 <= p2:
+        p1 = add_ticks(p2, 1)
+    if p2 <= p3:
+        p2 = add_ticks(p3, 1)
 
-    if p3 <= 0 or cl <= 0 or last <= cl:
+    # 4. Hitung TP & CL
+    # TP: Minimal 4 tick dari P1, atau 3% dari harga sekarang (mana yang lebih tinggi)
+    tp = max(add_ticks(p1, 4), int(round(last * 1.03)))
+    
+    # CL: Selalu 1 tick di bawah titik terbawah (P3), aman dari gap
+    cl = add_ticks(p3, -1)
+
+    # 5. Validasi Akhir (Wajib)
+    if p3 <= 0 or cl <= 0 or last <= p1:
         return
 
     # =====================================================
