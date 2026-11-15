@@ -1402,7 +1402,7 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
         return
 
     if not (-0.5 <= vwap_distance <= MAX_VWAP_DISTANCE_ENTRY_PERCENT):
-    return
+        return
 
     # =====================================================
     # 2. IDENTIFIKASI IMPULS NAIK
