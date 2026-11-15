@@ -55,12 +55,14 @@ if LIVE_MODE:
     MIN_BID_SUPPORT_LOT = 2000
     MIN_BID_TO_WALL_RATIO = 0.60  # Minimal total Bid 1+2 = 60% dari tebal tembok Offer agar siap dorong
     MIN_PULLBACK_RANGE_PERCENT = 4.0
+    MAX_VWAP_DISTANCE_ENTRY_PERCENT = 3.0
     MAX_PULLBACK_VWAP_DISTANCE_PERCENT = 1.2
     PULLBACK_BOUNCE_SAMPLES = 3
 else:
     MIN_BID_SUPPORT_LOT = 10
     MIN_BID_TO_WALL_RATIO = 0.0
     MIN_PULLBACK_RANGE_PERCENT = 0.5
+    MAX_VWAP_DISTANCE_ENTRY_PERCENT = 3.0
     MAX_PULLBACK_VWAP_DISTANCE_PERCENT = 10.0
     PULLBACK_BOUNCE_SAMPLES = 3
 
@@ -114,6 +116,7 @@ def load_app_config() -> Dict[str, str]:
     env_tg = os.environ.get("TELEGRAM_TOKEN", "").strip()
     env_chat = os.environ.get("CHAT_ID", "").strip()
     env_scr = os.environ.get("SCREENER_URL", "").strip()
+    env_scr2 = os.environ.get("SCREENER_URL_2", "").strip()
     env_admin = os.environ.get("ADMIN_ID", "").strip()
 
     default_config = {
@@ -121,6 +124,7 @@ def load_app_config() -> Dict[str, str]:
         "chat_id": env_chat,
         "admin_id": env_admin,
         "screener_url": env_scr or "https://stockbit.com",
+        "screener_url_2": env_scr2,
     }
     if os.path.exists(config_path):
         try:
@@ -132,6 +136,7 @@ def load_app_config() -> Dict[str, str]:
                     "chat_id": env_chat or str(loaded.get("chat_id") or "").strip(),
                     "admin_id": env_admin or str(loaded.get("admin_id") or "").strip(),
                     "screener_url": env_scr or str(loaded.get("screener_url") or default_config["screener_url"]).strip(),
+                    "screener_url_2": env_scr2 or str(loaded.get("screener_url_2") or "").strip(),
                 }
         except Exception as exc:
             log(f"Gagal membaca config.json ({exc}).")
@@ -195,6 +200,7 @@ APP_CONFIG = load_app_config()
 TELEGRAM_TOKEN = APP_CONFIG["telegram_token"]
 CHAT_ID = APP_CONFIG["chat_id"]
 SCREENER_URL = APP_CONFIG["screener_url"]
+SCREENER_URL_2 = APP_CONFIG.get("screener_url_2", "")
 TOPIC_ID = int(os.environ.get("TOPIC_ID", "0") or 0)
 TOPIC_WINRATE_ID = int(os.environ.get("TOPIC_WINRATE_ID", "0") or 0)
 ADMIN_ID = os.environ.get("ADMIN_ID", "").strip()
@@ -628,14 +634,20 @@ def http_get_json(url: str, label: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def fetch_screener() -> List[str]:
-    if not SCREENER_URL or "ISI_URL" in SCREENER_URL:
+def fetch_screener(url: str = "", label: str = "Screener") -> List[str]:
+    target = url or SCREENER_URL
+    if not target or "ISI_URL" in target:
         return []
-    payload = http_get_json(SCREENER_URL, "Screener")
+    payload = http_get_json(target, label)
+    ...  # sisa body SAMA PERSIS, tidak diubah
     if not payload or payload.get("__http_status__"):
         return []
     calcs = payload.get("data", {}).get("calcs", []) if isinstance(payload.get("data"), dict) else []
     if not isinstance(calcs, list):
+        log(f"[{label}] Struktur payload screener tidak dikenali (calcs bukan list).")
+        return []
+    if not calcs:
+        log(f"[{label}] Payload valid tapi calcs kosong (screener tidak mengembalikan saham).")
         return []
     try:
         calcs = sorted(
@@ -654,6 +666,18 @@ def fetch_screener() -> List[str]:
                 symbols.append(symbol)
     return symbols
 
+def fetch_screener_with_fallback() -> List[str]:
+    primary = fetch_screener(SCREENER_URL, "Screener#1")
+    if primary:
+        return primary
+    if SCREENER_URL_2:
+        log("Screener #1 kosong/gagal, mencoba Screener #2...")
+        secondary = fetch_screener(SCREENER_URL_2, "Screener#2")
+        if secondary:
+            log(f"Screener #2 memberi {len(secondary)} saham.")
+            return secondary
+        log("Screener #2 juga kosong/gagal.")
+    return []
 
 def resolve_universe(screener_symbols: List[str]) -> List[str]:
     mode = MODE_CAKUPAN.strip().upper()
@@ -736,6 +760,8 @@ def telegram_request(method: str, payload: Dict[str, Any], timeout: int = 8) -> 
         return None
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
     for _ in range(3):
+        if STOP_EVENT.is_set():
+            return None
         try:
             response = requests.post(url, json=payload, timeout=timeout)
             result = response.json()
@@ -1258,7 +1284,7 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
             continue
 
         distance_ticks = (wall_price - last) / tick if tick else 999
-        near_high = wall_price >= high - tick
+        near_high = wall_price >= high - (2 * tick)
         if distance_ticks == 1 and near_high:
             signal_key = f"{symbol}|BO|{wall_price}"
             if STORE.has_recent_key(signal_key, COOLDOWN_SECONDS):
@@ -1375,8 +1401,8 @@ def detect_pullback(symbol: str, last: int, high: int, low: int, vwap: float, ti
     if range_percent < 1.5:
         return
 
-    if not (-0.5 <= vwap_distance <= 1.5):
-        return
+    if not (-0.5 <= vwap_distance <= MAX_VWAP_DISTANCE_ENTRY_PERCENT):
+    return
 
     # =====================================================
     # 2. IDENTIFIKASI IMPULS NAIK
@@ -1803,6 +1829,8 @@ def build_watchlist(current: List[str]) -> List[str]:
 def handle_shutdown_signal(signum, _frame) -> None:
     log(f"Sinyal berhenti diterima ({signum}), menutup bot dengan bersih...")
     STOP_EVENT.set()
+    # Beri waktu thread lain menyelesaikan iterasi terakhir, lalu paksa keluar
+    threading.Timer(20.0, lambda: os._exit(0)).start()
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -1849,7 +1877,7 @@ def main() -> None:
     start_keepalive_server()
 
 
-    screener_symbols = [] if MODE_CAKUPAN.strip().upper() == "CUSTOM" else fetch_screener()
+    screener_symbols = [] if MODE_CAKUPAN.strip().upper() == "CUSTOM" else fetch_screener_with_fallback()
     current_watchlist = resolve_universe(screener_symbols)
     with LOCK:
         CURRENT_WATCHLIST_SHARED = current_watchlist[:]
@@ -1863,7 +1891,8 @@ def main() -> None:
     cycle = 0
     lunch_reset_date = ""
 
-    with ThreadPoolExecutor(max_workers=JUMLAH_WORKER) as executor:
+    executor = ThreadPoolExecutor(max_workers=JUMLAH_WORKER)
+    try:
         while not STOP_EVENT.is_set():
             cycle_start = time.time()
             now = now_wib()
@@ -1913,7 +1942,7 @@ def main() -> None:
                 last_status = market_status
 
             if MODE_CAKUPAN.strip().upper() != "CUSTOM" and time.time() - last_screener_update >= UPDATE_SCREENER_SECONDS:
-                new_symbols = fetch_screener()
+                new_symbols = fetch_screener_with_fallback()
                 if new_symbols:
                     new_list = resolve_universe(new_symbols)
                     if new_list:
@@ -1942,7 +1971,10 @@ def main() -> None:
             sleep_for = max(1.0, SCAN_INTERVAL_SECONDS - elapsed)
             STOP_EVENT.wait(sleep_for)
 
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     fast_thread.join(timeout=3)
+    cmd_thread.join(timeout=3)
     log("Bot berhenti sepenuhnya dengan bersih.")
 
 
