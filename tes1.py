@@ -44,9 +44,9 @@ UPDATE_SCREENER_SECONDS = 90      # Update screener tiap 1.5 menit
 REQUEST_TIMEOUT_SECONDS = 12
 HTTP_RETRIES = 2
 
-# Parameter Strategi Otomatis (Mengikuti LIVE_MODE)
-COOLDOWN_SECONDS = 180
-MIN_WALL_LOT = 5000
+COOLDOWN_SECONDS = 900            # 15 menit per emiten agar tidak spam simbol yang sama
+MIN_WALL_LOT = 5000               # Batas bawah tetap 5.000 lot (untuk harga tinggi)
+MIN_WALL_VALUE_IDR = 300_000_000  # Tembok dinamis minimal senilai Rp 300 Juta
 MIN_DAILY_VALUE_IDR = 2_000_000_000
 MAX_SIGNAL_AGE_SECONDS = 900      # Maksimal 15 menit (otomatis dipangkas jika mendekati 15:50 WIB)
 MAX_GAIN_WARNING_PERCENT = 15.0   # Peringatan pucuk jika kenaikan >= 15%
@@ -1261,11 +1261,19 @@ def is_spread_tight(bids: List[Dict[str, Any]], offers: List[Dict[str, Any]], ti
     return (offer1_price - bid1_price) <= tick
 
 
-def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion: float,
+def detect_breakout(symbol: str, last: int, high: int, vwap: float, tick: int, value_billion: float,
                     offers: List[Dict[str, Any]], bids: List[Dict[str, Any]], gain_pct: float = 0.0) -> None:
     if SCAN_PAUSED.is_set() or STORE.active_count() >= MAX_ACTIVE_SIGNALS or STORE.has_active(symbol, "BO"):
         return
     if not is_spread_tight(bids, offers, tick):
+        return
+
+    # 1. Wajib tren hijau & bertahan di atas VWAP (blokir saham koreksi seperti KLBF/CTRA)
+    if gain_pct < 0.5 or (vwap > 0 and last < int(vwap)):
+        return
+
+    # 2. Cooldown per emiten (bukan per harga)
+    if STORE.has_recent_key(f"{symbol}|BO", COOLDOWN_SECONDS):
         return
 
     bid_lots = sum(extract_lots(x, ORDERBOOK_VOLUME_UNIT) for x in bids[:2])
@@ -1273,28 +1281,28 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
         return
 
     kandidat = None
-    for level in offers[:4]:
+    for level in offers[:3]:
         wall_price = safe_int(level.get("price"))
         lots = extract_lots(level, ORDERBOOK_VOLUME_UNIT)
-        if wall_price <= last or lots < MIN_WALL_LOT:
+        wall_value_idr = wall_price * lots * 100
+
+        # Tembok dinamis: minimal 5.000 lot DAN nilai tembok minimal Rp 300 Juta
+        if wall_price <= last or lots < MIN_WALL_LOT or wall_value_idr < MIN_WALL_VALUE_IDR:
             continue
 
         if bid_lots < int(lots * MIN_BID_TO_WALL_RATIO):
             continue
 
         distance_ticks = (wall_price - last) / tick if tick else 999
-        near_high = wall_price >= high - (2 * tick)
+        near_high = wall_price >= high - tick
         if distance_ticks == 1 and near_high:
-            signal_key = f"{symbol}|BO|{wall_price}"
-            if STORE.has_recent_key(signal_key, COOLDOWN_SECONDS):
-                return
-            kandidat = (wall_price, lots, signal_key)
+            kandidat = (wall_price, lots)
             break
 
     if not kandidat:
         return
 
-    wall_price, initial_lots, signal_key = kandidat
+    wall_price, initial_lots = kandidat
     wall_swept = False
 
     if LIVE_MODE:
@@ -1319,11 +1327,10 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
         entry = add_ticks(wall_price, 1)
         already_broke = new_last >= entry
         wall_swept = (new_last >= wall_price and remaining_wall_lots == 0 and new_bid_lots >= MIN_BID_SUPPORT_LOT)
-        wall_still_valid = remaining_wall_lots >= int(initial_lots * 0.5) and new_bid_lots >= MIN_BID_SUPPORT_LOT
-        wall_eaten_up = new_last >= wall_price and remaining_wall_lots < initial_lots
+        wall_eaten_75 = (new_last >= wall_price and remaining_wall_lots <= int(initial_lots * 0.25) and new_bid_lots >= MIN_BID_SUPPORT_LOT)
 
-        if not (already_broke or wall_swept or wall_still_valid or wall_eaten_up):
-            log(f"[{symbol}] Spoof wall di {wall_price} terdeteksi, diabaikan.")
+        # Wajib tembok jebol atau termakan >= 75% (hentikan spam sinyal WAIT_BREAKOUT yang berujung EXPIRED)
+        if not (already_broke or wall_swept or wall_eaten_75):
             return
 
         last = new_last
@@ -1331,18 +1338,18 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
 
     now_ts = time.time()
     entry = add_ticks(wall_price, 1)
-    tp = add_ticks(entry, 4)
-    cl = add_ticks(wall_price, -2)
+    tp_ticks = 3 if entry < 200 else 2
+    tp = add_ticks(entry, tp_ticks)
+    cl = add_ticks(entry, -3)
     signal_id = str(uuid.uuid4())
 
-    is_confirmed = (last >= entry) or wall_swept
     state = {
         "signal_id": signal_id,
-        "signal_key": signal_key,
+        "signal_key": f"{symbol}|BO",
         "symbol": symbol,
         "kind": "BO",
-        "status": "ACTIVE" if is_confirmed else "WAIT_BREAKOUT",
-        "display_status": "BREAKOUT CONFIRMED" if is_confirmed else "PREPARE / WAIT WALL",
+        "status": "ACTIVE",
+        "display_status": "BREAKOUT CONFIRMED",
         "created_at": now_ts,
         "message_id": None,
         "resistance": wall_price,
@@ -1354,7 +1361,7 @@ def detect_breakout(symbol: str, last: int, high: int, tick: int, value_billion:
         "value_billion": value_billion,
         "wall_max_lots": initial_lots,
         "gain_pct": gain_pct,
-        "entry_confirmed": is_confirmed,
+        "entry_confirmed": True,
     }
     create_signal(state)
 
@@ -1621,7 +1628,7 @@ def analyze_symbol(symbol: str, data: Dict[str, Any], monitor_only: bool = False
         prev_close = get_previous_close(data) or low
         gain_pct = ((last - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
 
-        detect_breakout(symbol, last, high, tick, value_billion, offers, bids, gain_pct)
+        detect_breakout(symbol, last, high, vwap, tick, value_billion, offers, bids, gain_pct)
         detect_pullback(symbol, last, high, low, vwap, tick, value_billion, bids, offers, gain_pct)
     except Exception as exc:
         log(f"[Error Analisa {symbol}] {type(exc).__name__}: {exc}")
